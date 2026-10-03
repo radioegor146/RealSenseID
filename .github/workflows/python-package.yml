@@ -1,6 +1,8 @@
 name: python-package
 
-# Builds the rsid-py wheel for linux arm64 and macos arm64 (cp312).
+# Builds the rsid-py wheel for linux arm64 and macos arm64 (cp312), in two flavors:
+# - rsid-py        - regular (non-secure) sdk
+# - rsid-py-secure - secure sdk: adds FaceAuthenticator.pair (F45x only, speaks the secure protocol)
 # - Manual runs (workflow_dispatch): wheels are uploaded as workflow artifacts.
 # - Tag push (v*): wheels are additionally attached to the GitHub release for that tag.
 #
@@ -18,13 +20,19 @@ permissions: {}
 jobs:
   build-linux:
     runs-on: ubuntu-24.04-arm # free arm64 runner for public repos; docker runs the manylinux image natively
+    strategy:
+      matrix:
+        flavor: [nonsecure, secure]
+    env:
+      RSID_PY_SECURE: ${{ matrix.flavor == 'secure' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build wheel (manylinux_2_28 aarch64, cp312)
+      - name: Build wheel (manylinux_2_28 aarch64, cp312${{ matrix.flavor == 'secure' && ', secure' || '' }})
         run: |
           mkdir -p dist
           docker run --rm \
+            -e RSID_PY_SECURE \
             -v "$PWD":/src:ro \
             -v "$PWD/dist":/src/dist \
             quay.io/pypa/manylinux_2_28_aarch64 \
@@ -32,12 +40,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rsid-py-wheel-linux-arm64
+          name: rsid-py-wheel-linux-arm64-${{ matrix.flavor }}
           path: dist/*.whl
           if-no-files-found: error
 
   build-macos:
     runs-on: macos-15 # arm64 runner; setup-python provides the cp312 interpreter
+    strategy:
+      matrix:
+        flavor: [nonsecure, secure]
+    env:
+      RSID_PY_SECURE: ${{ matrix.flavor == 'secure' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,12 +58,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build wheel (macosx arm64, cp312)
+      - name: Build wheel (macosx arm64, cp312${{ matrix.flavor == 'secure' && ', secure' || '' }})
         run: bash packaging/python/build-wheel-macos.sh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rsid-py-wheel-macos-arm64
+          name: rsid-py-wheel-macos-arm64-${{ matrix.flavor }}
           path: dist/*.whl
           if-no-files-found: error
 

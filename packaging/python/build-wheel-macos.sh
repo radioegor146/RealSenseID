@@ -7,12 +7,21 @@ set -euo pipefail
 
 PY=python3
 
+# RSID_PY_SECURE=1 builds the secure variant (adds pair / secure session, F45x only, mbedtls inside)
+SECURE_CMAKE_FLAG=""
+PKG_NAME=rsid-py
+if [ "${RSID_PY_SECURE:-0}" = "1" ]; then
+    SECURE_CMAKE_FLAG="-DRSID_SECURE=ON"
+    PKG_NAME=rsid-py-secure
+fi
+
 "$PY" -m pip install --quiet delocate setuptools wheel
 
 # build the sdk and the pybind module against this interpreter.
 # deployment target 11.0 = the first arm64 macos, so the wheel runs on macos 11 and up
 cmake -S . -B build \
     -DRSID_PY=ON -DRSID_TOOLS=OFF -DRSID_PIPELINE=OFF -DRSID_PREVIEW=OFF -DRSID_SAMPLES=OFF -DRSID_TESTS=OFF \
+    $SECURE_CMAKE_FLAG \
     -DPYBIND11_FINDPYTHON=ON \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
     -DPython3_EXECUTABLE="$(command -v "$PY")"
@@ -36,12 +45,12 @@ EOF
 rm -rf packaging/python/build wheelhouse # stale setuptools build dir / old wheels would leak into the result
 # the interpreter on some setups (e.g. actions/setup-python) reports a "universal2" platform
 # although we build arm64-only - force the arm64 tag or delocate rejects the wheel
-RSID_BUILD_DIR="$PWD/build" RSID_PY_VERSION="$major" _PYTHON_HOST_PLATFORM=macosx-11.0-arm64 \
+RSID_BUILD_DIR="$PWD/build" RSID_PY_VERSION="$major" RSID_PY_NAME="$PKG_NAME" _PYTHON_HOST_PLATFORM=macosx-11.0-arm64 \
     "$PY" -m pip wheel --no-deps --no-build-isolation -w wheelhouse packaging/python
 MACOSX_DEPLOYMENT_TARGET=11.0 delocate-wheel --require-archs arm64 -w dist wheelhouse/*.whl
 
 # sanity check: install the wheel and import the module
-"$PY" -m pip install --quiet --force-reinstall --no-index --find-links dist rsid-py
+"$PY" -m pip install --quiet --force-reinstall --no-index --find-links dist "$PKG_NAME"
 "$PY" -c "import rsid_py; print('import ok:', rsid_py.__file__)"
 
 echo "wheel ready:"

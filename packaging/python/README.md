@@ -51,10 +51,81 @@ bash packaging/python/build-wheel-macos.sh
 ```
 
 The wheel version comes from `include/RealSenseID/Version.h` (what cmake/Version.cmake reads too).
-The PyPI-style project name is `rsid-py`; the importable module stays `rsid_py`.
+The importable module stays `rsid_py`.
 
-Note: the wrapper is built without `RSID_SECURE` (secure mode is not supported for the Python
-wrapper, per `wrappers/python/CMakeLists.txt`) and without the preview/pipeline extras. Building on
-macOS is enabled by small changes in `cmake/OS.cmake`, the serial `#ifdef` guards and
-`src/PacketManager/CMakeLists.txt` — regular USB serial (`LinuxSerial`) and `tcp://` serial both
-work there.
+## Secure variant (`rsid-py-secure`)
+
+Setting `RSID_PY_SECURE=1` when running a build script builds the secure sdk flavor instead:
+package name `rsid-py-secure` (same `rsid_py` module — don't install both flavors into one
+environment). Secure is F45x-only and speaks the secure protocol (regular operations need a paired
+/ secure-SKU device). Adds `pair()`, `unpair()` and a subclassable `SignatureCallback`.
+
+### The secure flow
+
+1. **Generate a host ECDSA P-256 keypair once and keep it forever** (losing the private key after
+   pairing locks you out of the device until you unpair with it):
+
+   ```python
+   from cryptography.hazmat.primitives.asymmetric import ec
+   from cryptography.hazmat.primitives import serialization
+
+   key = ec.generate_private_key(ec.SECP256R1())
+   open("host_key.pem", "wb").write(key.private_bytes(  # store safely
+       serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+   ```
+
+2. **Pair** — sends your public key (64-byte `X||Y`) and its signature (64-byte raw `r||s`,
+   SHA-256+P-256) to the device, which stores it and returns its own public key. **Save the device
+   key** — it is how you verify the device on every later session. On very first pairing the device
+   accepts any signature (it has no key yet), but sign properly anyway:
+
+   ```python
+   import rsid_py
+   from cryptography.hazmat.primitives import hashes
+   from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+   key = serialization.load_pem_private_key(open("host_key.pem", "rb").read(), None)
+   n = key.public_key().public_numbers()
+   host_pubkey = n.x.to_bytes(32, "big") + n.y.to_bytes(32, "big")
+   r, s = utils.decode_dss_signature(key.sign(host_pubkey, ec.ECDSA(hashes.SHA256())))
+   host_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+   fa = rsid_py.FaceAuthenticator(rsid_py.DeviceType.F45x, "tcp://192.168.1.42:12345")
+   device_pubkey = fa.pair(host_pubkey, host_sig)   # 64 bytes - store it (e.g. in a file)
+   ```
+
+3. **Operate with a real `SignatureCallback`** — every session start does an ECDH exchange signed by
+   you and verified against the device key, so pass a callback subclass that signs with your
+   private key and verifies with the stored device key (recipe mirrors
+   `samples/cpp/secure_mode_helper.cc` — SHA-256 digest, raw 64-byte `r||s` signatures):
+
+   ```python
+   class MySigCb(rsid_py.SignatureCallback):
+       def __init__(self, key, device_pubkey):
+           super().__init__()
+           self.key, self.device_pubkey = key, device_pubkey
+
+       def sign(self, buffer):
+           r, s = utils.decode_dss_signature(self.key.sign(buffer, ec.ECDSA(hashes.SHA256())))
+           return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+       def verify(self, buffer, signature):
+           r = int.from_bytes(signature[:32], "big"); s = int.from_bytes(signature[32:], "big")
+           pub = ec.EllipticCurvePublicNumbers(
+               int.from_bytes(self.device_pubkey[:32], "big"),
+               int.from_bytes(self.device_pubkey[32:], "big"), ec.SECP256R1()).public_key()
+           try:
+               pub.verify(utils.encode_dss_signature(r, s), buffer, ec.ECDSA(hashes.SHA256()))
+               return True
+           except InvalidSignature:
+               return False
+
+   fa = rsid_py.FaceAuthenticator(MySigCb(key, device_pubkey), rsid_py.DeviceType.F45x,
+                                  "tcp://192.168.1.42:12345")
+   ```
+
+4. **`unpair()`** reverts the device to non-secured state — it signs the all-`0xff` default public
+   key with your *current* private key, so it needs the same key you paired with.
+
+The no-callback constructors use a placeholder `SignatureCallback` internally: `pair()`/`unpair()`
+input plumbing works, but session operations fail — use the callback ctor for real usage.

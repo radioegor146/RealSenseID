@@ -18,10 +18,71 @@
 #include <vector>
 #include <algorithm>
 #include <type_traits>
+#include <cstring>
 
 // clang-format off
 namespace py = pybind11;
 using namespace RealSenseID;
+
+#ifdef RSID_SECURE
+namespace
+{
+// Placeholder signature callback for ctors that get no python callback - secure builds require one
+// at construction. Pair does not use it; operations that need signing / verification fail with it.
+class PlaceholderSignatureCallback : public SignatureCallback
+{
+public:
+    bool Sign(const unsigned char*, const unsigned int, unsigned char*) override
+    {
+        return false;
+    }
+    bool Verify(const unsigned char*, const unsigned int, const unsigned char*, const unsigned int) override
+    {
+        return false;
+    }
+};
+
+SignatureCallback& PlaceholderSignatureCallbackInstance()
+{
+    static PlaceholderSignatureCallback instance; // the sdk stores a non-owning pointer - live forever
+    return instance;
+}
+} // namespace
+
+// Trampoline for subclassing SignatureCallback from python (override sign / verify).
+// The callbacks are invoked from sdk code that runs with the gil released - acquire it here.
+class PySignatureCallback : public SignatureCallback
+{
+public:
+    bool Sign(const unsigned char* buffer, const unsigned int bufferLen, unsigned char* outSig) override
+    {
+        py::gil_scoped_acquire acquire;
+        py::object impl = py::get_override(this, "sign");
+        if (!impl)
+            return false;
+        py::object result = impl(py::bytes(reinterpret_cast<const char*>(buffer), bufferLen));
+        if (result.is_none())
+            return false;
+        const std::string signature = result.cast<std::string>();
+        constexpr size_t ecdsa_sig_size = 64; // ECC_P256_SIG_SIZE_BYTES (see samples/cpp/secure_mode_helper.cc)
+        if (signature.size() != ecdsa_sig_size)
+            return false;
+        std::memcpy(outSig, signature.data(), ecdsa_sig_size);
+        return true;
+    }
+
+    bool Verify(const unsigned char* buffer, const unsigned int bufferLen, const unsigned char* sig, const unsigned int sigLen) override
+    {
+        py::gil_scoped_acquire acquire;
+        py::object impl = py::get_override(this, "verify");
+        if (!impl)
+            return false;
+        py::object result = impl(py::bytes(reinterpret_cast<const char*>(buffer), bufferLen),
+                                 py::bytes(reinterpret_cast<const char*>(sig), sigLen));
+        return result.cast<bool>();
+    }
+};
+#endif // RSID_SECURE
 
 ///////////////////////////////////////////////////////////////////////////////////
 // Enroll Callback support
@@ -933,20 +994,55 @@ void init_face_authenticator(pybind11::module& m)
 
     ExtractedFaceprints pExtractedFaceprints;
 
+#ifdef RSID_SECURE
+    // Subclass and override sign / verify to enable the full secure session
+    // (see samples/cpp/secure_mode_helper.cc for the reference implementation).
+    py::class_<SignatureCallback, PySignatureCallback>(m, "SignatureCallback")
+        .def(py::init<>())
+        .def(
+            "sign", [](SignatureCallback&, const py::bytes&) -> py::object { return py::none(); }, py::arg("buffer"),
+            "Sign the buffer with the host's ecdsa private key (SHA-256, P-256). Return the raw 64-byte (r, s) "
+            "signature, or None to fail. Override in a subclass.")
+        .def(
+            "verify", [](SignatureCallback&, const py::bytes&, const py::bytes&) -> bool { return false; },
+            py::arg("buffer"), py::arg("signature"),
+            "Verify the buffer's raw 64-byte (r, s) signature with the device's ecdsa public key. Override in a "
+            "subclass.");
+#endif // RSID_SECURE
+
     py::class_<FaceAuthenticator>(m, "FaceAuthenticator")
         // ctor with give device type and serial port
         .def(py::init([](DeviceType deviceType, const std::string& port) { // ctor with port to connect
+#ifdef RSID_SECURE
+            // secure builds have no deviceType-only ctor - pass a placeholder signature callback
+            auto f = std::make_unique<FaceAuthenticator>(&PlaceholderSignatureCallbackInstance(), deviceType);
+#else
             auto f = std::make_unique<FaceAuthenticator>(deviceType);
+#endif
             RSID_THROW_ON_ERROR(f->Connect(SerialConfig {port.c_str()}));
             return f;
         }))
 
         // ctor with given serial port (F45x deviceType)
         .def(py::init([](const std::string& port) { // ctor with port to connect
+#ifdef RSID_SECURE
+            auto f = std::make_unique<FaceAuthenticator>(&PlaceholderSignatureCallbackInstance(), DeviceType::F45x);
+#else
             auto f = std::make_unique<FaceAuthenticator>();
+#endif
             RSID_THROW_ON_ERROR(f->Connect(SerialConfig {port.c_str()}));
             return f;
         }))
+
+#ifdef RSID_SECURE
+        // secure builds: ctor with signature callback, device type and serial port
+        .def(py::init([](SignatureCallback& callback, DeviceType deviceType, const std::string& port) {
+                 auto f = std::make_unique<FaceAuthenticator>(&callback, deviceType);
+                 RSID_THROW_ON_ERROR(f->Connect(SerialConfig {port.c_str()}));
+                 return f;
+             }),
+             py::keep_alive<1, 2>()) // the sdk stores a non-owning callback pointer - keep the python object alive
+#endif
 
         .def("__enter__", [](FaceAuthenticator& self) { return &self; })
         .def("__exit__", [](FaceAuthenticator& self, py::handle, py::handle, py::handle) { self.Disconnect(); })
@@ -957,6 +1053,34 @@ void init_face_authenticator(pybind11::module& m)
             py::call_guard<py::gil_scoped_release>())
 
         .def("disconnect", &FaceAuthenticator::Disconnect, py::call_guard<py::gil_scoped_release>())
+
+#ifdef RSID_SECURE
+        .def(
+            "pair",
+            [](FaceAuthenticator& self, const py::bytes& ecdsa_host_pubkey, const py::bytes& ecdsa_host_pubkey_sig) {
+                // key / signature sizes are fixed by the protocol: 64-byte X||Y public key,
+                // 64-byte raw (r, s) signature (ECC_P256_*_SIZE_BYTES, see secure_mode_helper.cc)
+                constexpr size_t host_pubkey_size = 64;
+                constexpr size_t host_pubkey_sig_size = 64;
+                const std::string host_pubkey = static_cast<std::string>(ecdsa_host_pubkey);
+                const std::string host_pubkey_sig = static_cast<std::string>(ecdsa_host_pubkey_sig);
+                if (host_pubkey.size() != host_pubkey_size)
+                    throw std::invalid_argument("host public key must be exactly 64 bytes");
+                if (host_pubkey_sig.size() != host_pubkey_sig_size)
+                    throw std::invalid_argument("host public key signature must be exactly 64 bytes");
+
+                char ecdsa_device_pubkey[host_pubkey_size];
+                RSID_THROW_ON_ERROR(self.Pair(host_pubkey.data(), host_pubkey_sig.data(), ecdsa_device_pubkey));
+                return py::bytes(ecdsa_device_pubkey, host_pubkey_size);
+            },
+            py::call_guard<py::gil_scoped_release>(), py::arg("ecdsa_host_pubkey"), py::arg("ecdsa_host_pubkey_sig"),
+            "Pair with the device: send the host ecdsa public key (64-byte X||Y) and its signature (64-byte raw r, s), "
+            "returns the device ecdsa public key (64 bytes) - store it. Secure builds only.")
+        .def(
+            "unpair", [](FaceAuthenticator& self) { RSID_THROW_ON_ERROR(self.Unpair()); },
+            py::call_guard<py::gil_scoped_release>(),
+            "Unpair from the device, disabling security on it (signed with the current host key). Secure builds only.")
+#endif // RSID_SECURE
 
         .def(
             "cancel", [](FaceAuthenticator& self) { RSID_THROW_ON_ERROR(self.Cancel()); }, py::call_guard<py::gil_scoped_release>())

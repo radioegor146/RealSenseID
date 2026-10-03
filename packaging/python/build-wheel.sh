@@ -11,6 +11,14 @@ set -euo pipefail
 PY=/opt/python/cp312-cp312/bin/python
 PYENV=/opt/python/cp312-cp312
 
+# RSID_PY_SECURE=1 builds the secure variant (adds pair / secure session, F45x only, mbedtls inside)
+SECURE_CMAKE_FLAG=""
+PKG_NAME=rsid-py
+if [ "${RSID_PY_SECURE:-0}" = "1" ]; then
+    SECURE_CMAKE_FLAG="-DRSID_SECURE=ON"
+    PKG_NAME=rsid-py-secure
+fi
+
 # recent cmake + auditwheel from pip; setuptools/wheel for the packaging step
 # (modern manylinux cp envs no longer preinstall setuptools, which --no-build-isolation needs)
 "$PY" -m pip install --quiet cmake auditwheel setuptools wheel
@@ -23,6 +31,7 @@ PYENV=/opt/python/cp312-cp312
 #   FindPythonLibsNew, which would otherwise pick the system python and break the include path
 cmake -S /src -B /tmp/build \
     -DRSID_PY=ON -DRSID_TOOLS=OFF -DRSID_PIPELINE=OFF -DRSID_PREVIEW=OFF -DRSID_SAMPLES=OFF -DRSID_TESTS=OFF \
+    $SECURE_CMAKE_FLAG \
     -DPYBIND11_FINDPYTHON=ON \
     -DPython3_ROOT_DIR="$PYENV" \
     -DPython3_EXECUTABLE="$PY" \
@@ -39,12 +48,12 @@ patch=$(grep -oP '^#define RSID_VER_PATCH \K[0-9]+' /src/include/RealSenseID/Ver
 # (copy the packaging dir to a writable location - /src is mounted read-only and pip builds in-tree)
 cp -r /src/packaging/python /tmp/pkg
 rm -rf /tmp/pkg/build # stale setuptools build dir would leak old files into the wheel
-RSID_BUILD_DIR=/tmp/build RSID_PY_VERSION="$major.$minor.$patch" \
+RSID_BUILD_DIR=/tmp/build RSID_PY_VERSION="$major.$minor.$patch" RSID_PY_NAME="$PKG_NAME" \
     "$PY" -m pip wheel --no-deps --no-build-isolation -w /tmp/wheelhouse /tmp/pkg
 "$PY" -m auditwheel repair /tmp/wheelhouse/*.whl -w /src/dist
 
 # sanity check: install the repaired wheel and import the module
-"$PY" -m pip install --quiet --force-reinstall --no-index --find-links /src/dist rsid-py
+"$PY" -m pip install --quiet --force-reinstall --no-index --find-links /src/dist "$PKG_NAME"
 "$PY" -c "import rsid_py; print('import ok:', rsid_py.__file__)"
 
 echo "wheel ready:"

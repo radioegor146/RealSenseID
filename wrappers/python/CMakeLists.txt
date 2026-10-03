@@ -1,9 +1,5 @@
 project(LibRealSenseID_Py CXX)
 
-if (RSID_SECURE)
-    message(FATAL_ERROR "Secure mode is not supported for python wrapper")
-endif ()
-
 # Make sure that Python3 interpreter and dev headers are present on the system
 find_package(Python3 COMPONENTS Interpreter Development)
 

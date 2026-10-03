@@ -1,0 +1,6 @@
+README.md
+setup.py
+rsid_py_secure.egg-info/PKG-INFO
+rsid_py_secure.egg-info/SOURCES.txt
+rsid_py_secure.egg-info/dependency_links.txt
+rsid_py_secure.egg-info/top_level.txt
