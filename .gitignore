@@ -426,3 +426,7 @@ build
 
 # ONNX model files (fetched separately, not committed)
 models/*.onnx
+
+# python wheel build output (packaging/python)
+/dist/
+/wheelhouse/

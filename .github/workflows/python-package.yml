@@ -1,0 +1,73 @@
+name: python-package
+
+# Builds the rsid-py wheel for linux arm64 and macos arm64 (cp312).
+# - Manual runs (workflow_dispatch): wheels are uploaded as workflow artifacts.
+# - Tag push (v*): wheels are additionally attached to the GitHub release for that tag.
+#
+# Install from a release on the device host / mac:
+#   pip install https://github.com/<you>/RealSenseID/releases/download/<tag>/<wheel-file>.whl
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04-arm # free arm64 runner for public repos; docker runs the manylinux image natively
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel (manylinux_2_28 aarch64, cp312)
+        run: |
+          mkdir -p dist
+          docker run --rm \
+            -v "$PWD":/src:ro \
+            -v "$PWD/dist":/src/dist \
+            quay.io/pypa/manylinux_2_28_aarch64 \
+            bash /src/packaging/python/build-wheel.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rsid-py-wheel-linux-arm64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-15 # arm64 runner; setup-python provides the cp312 interpreter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel (macosx arm64, cp312)
+        run: bash packaging/python/build-wheel-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rsid-py-wheel-macos-arm64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: rsid-py-wheel-*
+          merge-multiple: true
+
+      - name: Attach wheels to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl

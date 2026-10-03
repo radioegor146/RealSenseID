@@ -4,7 +4,7 @@ set(HEADERS "${SRC_DIR}/Randomizer.h" "${SRC_DIR}/PacketSender.h" "${SRC_DIR}/Se
 
 set(SOURCES "${SRC_DIR}/Randomizer.cc" "${SRC_DIR}/PacketSender.cc" "${SRC_DIR}/SerialPacket.cc" "${SRC_DIR}/Timer.cc"  ${SRC_DIR}/Crc16.cc )
 
-if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR APPLE)
     list(APPEND HEADERS "${SRC_DIR}/LinuxSerial.h" "${SRC_DIR}/SerialOverLanSerial.h")
     list(APPEND SOURCES "${SRC_DIR}/LinuxSerial.cc" "${SRC_DIR}/SerialOverLanSerial.cc")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")

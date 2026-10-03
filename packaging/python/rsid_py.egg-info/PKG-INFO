@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: rsid-py
+Version: 3.6.1
+Summary: Python wrapper for the RealSense ID SDK
+Dynamic: summary

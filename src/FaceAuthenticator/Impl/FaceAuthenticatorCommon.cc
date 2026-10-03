@@ -31,7 +31,7 @@
 #include "PacketManager/WindowsSerial.h"
 #elif defined(__ANDROID__)
 #include "PacketManager/AndroidSerial.h"
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #include "PacketManager/LinuxSerial.h"
 #include "PacketManager/SerialOverLanSerial.h"
 #else
@@ -267,7 +267,7 @@ Status FaceAuthenticatorCommon::Connect(const SerialConfig& config)
         serial_config.readEndpoint = config.readEndpoint;
         serial_config.writeEndpoint = config.writeEndpoint;
         _serial = std::make_unique<PacketManager::AndroidSerial>(serial_config);
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
         // "tcp://host:port" address - tunnel the serial connection over the network (serial-over-lan)
         if (PacketManager::IsSerialOverLanAddress(config.port))
         {
