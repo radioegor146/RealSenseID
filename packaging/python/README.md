@@ -60,6 +60,11 @@ package name `rsid-py-secure` (same `rsid_py` module — don't install both flav
 environment). Secure is F45x-only and speaks the secure protocol (regular operations need a paired
 / secure-SKU device). Adds `pair()`, `unpair()` and a subclassable `SignatureCallback`.
 
+A complete runnable walkthrough lives in [`secure_pair_example.py`](secure_pair_example.py)
+(`keygen` / `pair` / `demo` subcommands — requires `pip install cryptography`). Both keys are
+stored as PEM; the device key is a standard SubjectPublicKeyInfo public key
+(inspect with `openssl ec -pubin -in device_pubkey.pem -text`).
+
 ### The secure flow
 
 1. **Generate a host ECDSA P-256 keypair once and keep it forever** (losing the private key after

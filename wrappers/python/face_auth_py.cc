@@ -1070,10 +1070,15 @@ void init_face_authenticator(pybind11::module& m)
                     throw std::invalid_argument("host public key signature must be exactly 64 bytes");
 
                 char ecdsa_device_pubkey[host_pubkey_size];
-                RSID_THROW_ON_ERROR(self.Pair(host_pubkey.data(), host_pubkey_sig.data(), ecdsa_device_pubkey));
+                {
+                    // release the gil only for the blocking device io - the py::bytes result below
+                    // must be constructed with the gil held (allocating py objects without it segfaults)
+                    py::gil_scoped_release release;
+                    RSID_THROW_ON_ERROR(self.Pair(host_pubkey.data(), host_pubkey_sig.data(), ecdsa_device_pubkey));
+                }
                 return py::bytes(ecdsa_device_pubkey, host_pubkey_size);
             },
-            py::call_guard<py::gil_scoped_release>(), py::arg("ecdsa_host_pubkey"), py::arg("ecdsa_host_pubkey_sig"),
+            py::arg("ecdsa_host_pubkey"), py::arg("ecdsa_host_pubkey_sig"),
             "Pair with the device: send the host ecdsa public key (64-byte X||Y) and its signature (64-byte raw r, s), "
             "returns the device ecdsa public key (64 bytes) - store it. Secure builds only.")
         .def(
