@@ -33,10 +33,12 @@ EOF
 )
 
 # package the prebuilt module, then vendor librsid into the wheel (delocate follows the absolute path)
-rm -rf packaging/python/build # stale setuptools build dir would leak old files into the wheel
-RSID_BUILD_DIR="$PWD/build" RSID_PY_VERSION="$major" \
+rm -rf packaging/python/build wheelhouse # stale setuptools build dir / old wheels would leak into the result
+# the interpreter on some setups (e.g. actions/setup-python) reports a "universal2" platform
+# although we build arm64-only - force the arm64 tag or delocate rejects the wheel
+RSID_BUILD_DIR="$PWD/build" RSID_PY_VERSION="$major" _PYTHON_HOST_PLATFORM=macosx-11.0-arm64 \
     "$PY" -m pip wheel --no-deps --no-build-isolation -w wheelhouse packaging/python
-delocate-wheel --require-archs arm64 -w dist wheelhouse/*.whl
+MACOSX_DEPLOYMENT_TARGET=11.0 delocate-wheel --require-archs arm64 -w dist wheelhouse/*.whl
 
 # sanity check: install the wheel and import the module
 "$PY" -m pip install --quiet --force-reinstall --no-index --find-links dist rsid-py
