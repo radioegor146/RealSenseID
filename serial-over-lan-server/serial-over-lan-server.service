@@ -1,0 +1,20 @@
+# systemd unit for serial-over-lan-server.
+# Install to /etc/systemd/system/serial-over-lan-server.service - see SETUP.md for the full walkthrough.
+
+[Unit]
+Description=Serial-over-LAN bridge for RealSense ID devices
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/default/serial-over-lan-server
+ExecStart=/usr/local/bin/uv run /opt/serial-over-lan-server/server.py
+Restart=on-failure
+RestartSec=2
+
+# To run unprivileged instead of as root, create a user with serial port access
+# (useradd -m serialbridge && usermod -aG dialout serialbridge) and uncomment:
+# User=serialbridge
+# Environment=HOME=/home/serialbridge
+
+[Install]
+WantedBy=multi-user.target

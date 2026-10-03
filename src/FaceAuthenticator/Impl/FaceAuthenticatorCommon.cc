@@ -33,6 +33,7 @@
 #include "PacketManager/AndroidSerial.h"
 #elif defined(__linux__)
 #include "PacketManager/LinuxSerial.h"
+#include "PacketManager/SerialOverLanSerial.h"
 #else
 #error "Platform not supported"
 #endif //_WIN32
@@ -267,7 +268,15 @@ Status FaceAuthenticatorCommon::Connect(const SerialConfig& config)
         serial_config.writeEndpoint = config.writeEndpoint;
         _serial = std::make_unique<PacketManager::AndroidSerial>(serial_config);
 #elif defined(__linux__)
-        _serial = std::make_unique<PacketManager::LinuxSerial>(PacketManager::SerialConfig({config.port}));
+        // "tcp://host:port" address - tunnel the serial connection over the network (serial-over-lan)
+        if (PacketManager::IsSerialOverLanAddress(config.port))
+        {
+            _serial = std::make_unique<PacketManager::SerialOverLanSerial>(PacketManager::SerialConfig({config.port}));
+        }
+        else
+        {
+            _serial = std::make_unique<PacketManager::LinuxSerial>(PacketManager::SerialConfig({config.port}));
+        }
 #else
         LOG_ERROR(LOG_TAG, "Serial connection method not supported for OS");
         return Status::Error;
